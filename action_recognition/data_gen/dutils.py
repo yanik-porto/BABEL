@@ -46,6 +46,13 @@ def write_pkl(contents, filename):
 	with open(filename, 'wb') as outfile:
 		pickle.dump(contents, outfile)
 
+def smpl_to(model_type='smplh', out_format='nturgbd'):
+	if model_type == 'smplh' and out_format == 'nturgbd':
+		return smpl_to_nturgbd()
+	elif model_type == 'smplh' and out_format == 'h36m':
+		return smpl_to_h36m()
+	return None
+	
 def smpl_to_nturgbd(model_type='smplh', out_format='nturgbd'):
 	''' Borrowed from https://gitlab.tuebingen.mpg.de/apunnakkal/2s_agcn/-/blob/master/data_gen/smpl_data_utils.py
 	NTU mapping
@@ -90,6 +97,41 @@ def smpl_to_nturgbd(model_type='smplh', out_format='nturgbd'):
 						 2, 5, 8, 11,			#right hand
 						 9,
 						 63, 64 , 68, 69
+						 ],
+						dtype=np.int32)
+
+def smpl_to_h36m(model_type='smplh', out_format='h36m'):
+	''' Borrowed from https://gitlab.tuebingen.mpg.de/apunnakkal/2s_agcn/-/blob/master/data_gen/smpl_data_utils.py
+	H36M mapping
+	-----------
+    0-'pelvis',
+    1-'left_hip',
+    2-'left_knee',
+    3-'left_ankle',
+    4-'right_hip',
+    5-'right_knee',
+    6-'right_ankle',
+    7-'spine',
+    8-'neck',  # 'thorax',
+    9-'neck/nose',
+    10-'head',  # 'head_h36m',
+    11-'left_shoulder',
+    12-'left_elbow',
+    13-'left_wrist',
+    14-'right_shoulder',
+    15-'right_elbow',
+    16-'right_wrist'
+
+	:param model_type:
+	:param out_format:
+	:return:
+	'''
+	if model_type == 'smplh' and out_format == 'h36m':
+		return np.array([0, 1, 4, 7, # left leg
+						 2, 5, 8, # right leg
+						 3,	9, 12, 15,	#spine, thorax, neck, head
+						 16, 18, 20,		   # left arm
+						 17, 19, 21,			#right arm
 						 ],
 						dtype=np.int32)
 

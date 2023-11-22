@@ -163,14 +163,15 @@ class Babel_AR:
            Fraction of segment covered by an action: {'walk': 1.0, 'wave': 0.5}
 
     '''
-    def __init__(self, dataset, dense=True, seq_dense_ann_type={}):
+    def __init__(self, dataset, dense=True, seq_dense_ann_type={}, sk_type='nturgbd'):
         '''Dataset with (samples, different GTs)
         '''
         # Load dataset
         self.babel = dataset
         self.dense = dense
         self.seq_dense_ann_type = seq_dense_ann_type
-        self.jpos_p = '../../../../../amass/'
+        self.sk_type = sk_type
+        self.jpos_p = '../data/'
 
         # Get frame-rate for each seq. in AMASS
         f_p = '../data/featp_2_fps.json'
@@ -210,7 +211,7 @@ class Babel_AR:
 
     def _viz_x(self, ft, fn='test_sample'):
         '''Wraper to Viz. the given sample (w/ NTU RGBD skeleton)'''
-        viz.viz_seq(seq=ft, folder_p=f'test_viz/{fn}', sk_type='nturgbd',
+        viz.viz_seq(seq=ft, folder_p=f'test_viz/{fn}', sk_type=self.sk_type,
                                                                     debug=True)
         return None
 
@@ -219,7 +220,7 @@ class Babel_AR:
         # Identify appropriate feature directory path on disk
         if 'smpl_wo_hands' == sk_type:  # SMPL w/o hands (T, 22*3)
             jpos_p = ospj(self.jpos_p, 'joint_pos')
-        if 'nturgbd' == sk_type:  # NTU (T, 219)
+        if 'nturgbd' == sk_type or 'h36m' == sk_type:  # NTU (T, 219)
             jpos_p = ospj(self.jpos_p, 'babel_joint_pos')
 
         # Get the correct dataset folder name
@@ -238,7 +239,7 @@ class Babel_AR:
         T, ft_sz = ft.shape
 
         # Get NTU skeleton joints
-        ntu_js = dutils.smpl_to_nturgbd(model_type='smplh', out_format='nturgbd')
+        ntu_js = dutils.smpl_to(model_type='smplh', out_format=sk_type)
         ft = ft.reshape(T, -1, 3)
         ft = ft[:, ntu_js, :]
 
@@ -376,7 +377,7 @@ class Babel_AR:
         '''Return one sample (one segment) = (X, Y1, Yall)'''
 
         # Get feats. for seq.
-        seq_ft = self._load_seq_feats(ann['feat_p'], 'nturgbd')
+        seq_ft = self._load_seq_feats(ann['feat_p'], self.sk_type)
 
         # To keep track of type of annotation for loading 'extra'
         # Compute all GT labels for this seq.
@@ -426,14 +427,15 @@ class Babel_AR:
 
 #  Create dataset
 # --------------------------
-d_folder = '../../data/babel_v1.0_release/'
+d_folder = '../data/babel_v1.0_release/'
 w_folder = '../data/babel_v1.0/'
+sk_type = 'h36m'
 for spl in ['train', 'val']:
 
     # Load Dense BABEL
     data = dutils.read_json(ospj(d_folder, f'{spl}.json'))
     dataset = [data[sid] for sid in data]
-    dense_babel = Babel_AR(dataset, dense=True)
+    dense_babel = Babel_AR(dataset, dense=True, sk_type=sk_type)
     # Store Dense BABEL
     d_filename = w_folder + 'babel_v1.0_'+ spl + '_samples.pkl'
     dutils.write_pkl(dense_babel.d, d_filename)

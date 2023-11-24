@@ -198,61 +198,94 @@ def store_seq_fps(amass_p):
 	write_json(ft_p_2_fps, dest_fp)
 	return None
 
-def store_ntu_jpos(smplh_model_p, dest_jpos_p, amass_p):
-	'''Store joint positions of kfor NTU-RGBD skeleton
-	'''
-	# Model to forward-pass through, to store joint positions
-	smplh = SMPLH(smplh_model_p, create_transl=False, ext='pkl',
-							gender='male', use_pca=False, batch_size=1)
+def adapt_dataset_folder_name(ft_p):
+		ddir_n = ospb(ospd(ospd(ft_p)))
+		ddir_map = {'BioMotionLab_NTroje': 'BMLrub', 'DFaust_67': 'DFaust'}
+		ddir_n = ddir_map[ddir_n] if ddir_n in ddir_map else ddir_n
+		# Get the subject folder name
+		sub_fol_n = ospb(ospd(ft_p))
+		fft_p = ospj(ddir_n, sub_fol_n, ospb(ft_p))
+		return fft_p
 
+def get_missing_body_joint_pos(dest_jpos_p):
 	# Load paths to all BABEL features
 	featp_2_fps = read_json('../data/featp_2_fps.json')
 
 	# Loop over all BABEL data, verify that joint positions are stored on disk
 	l_m_ft_p = []
 	for ft_p in featp_2_fps:
-
-		# Get the correct dataset folder name
-		ddir_n = ospb(ospd(ospd(ft_p)))
-		ddir_map = {'BioMotionLab_NTroje': 'BMLrub', 'DFaust_67': 'DFaust'}
-		ddir_n = ddir_map[ddir_n] if ddir_n in ddir_map else ddir_n
-		# Get the subject folder name
-		sub_fol_n = ospb(ospd(ft_p))
-
 		# Sanity check
-		fft_p = ospj(dest_jpos_p, ddir_n, sub_fol_n, ospb(ft_p))
+		fft_p = ospj(dest_jpos_p, adapt_dataset_folder_name(ft_p))
 		if not os.path.exists(fft_p):
 			l_m_ft_p.append((ft_p, fft_p))
 	print('Total # missing NTU RGBD skeleton features = ', len(l_m_ft_p))
+	return l_m_ft_p
 
-	# Loop over missing joint positions and store them on disk
-	for i, (ft_p, ntu_jpos_p) in enumerate(tqdm(l_m_ft_p)):
-		jrot_smplh = np.load(ospj(amass_p, ft_p))['poses']
-		# Break joints down into body parts
-		smpl_body_jrot = jrot_smplh[:, 3:66]
-		left_hand_jrot = jrot_smplh[:, 66:111]
-		right_hand_jrot = jrot_smplh[:, 111:]
-		root_orient = jrot_smplh[:, 0:3].reshape(-1, 3)
+def get_existing_amass_pose(amass_p, dest_jpos_p):
+	l_m_ft_p = []
+	for root, _, files in os.walk(amass_p):
+		for f in files:
+			if f.endswith(".npz"):
+				src = osp.relpath(ospj(root, f), amass_p)
+				dst = ospj(dest_jpos_p, adapt_dataset_folder_name(src))
+				l_m_ft_p.append((src, dst))
 
-		# Forward through model to get a superset of required joints
-		T = jrot_smplh.shape[0]
-		ntu_jpos = np.zeros((T, 219))
-		for t in range(T):
-			res = smplh(body_pose=torch.Tensor(smpl_body_jrot[t:t+1, :]),
-						global_orient=torch.Tensor(root_orient[t: t+1, :]),
-						left_hand_pose = torch.Tensor(left_hand_jrot[t: t+1, :]),
-						right_hand_pose=torch.Tensor(right_hand_jrot[t: t+1, :]),
-						# transl=torch.Tensor(transl)
-						)
-			jpos = res.joints.detach().cpu().numpy()[:, :, :].reshape(-1)
-			ntu_jpos[t, :] = jpos
+	return l_m_ft_p
 
-		# Save to disk
-		if not os.path.exists(ospd(ntu_jpos_p)):
-			os.makedirs(ospd(ntu_jpos_p))
-		np.savez(ntu_jpos_p, joint_pos=ntu_jpos, allow_pickle=True)
+def convert_smpl_to_ntu_joint_pose(	smplh, bdata):
+	jrot_smplh = bdata['poses']
 
-	return
+	# Break joints down into body parts
+	smpl_body_jrot = jrot_smplh[:, 3:66]
+	left_hand_jrot = jrot_smplh[:, 66:111]
+	right_hand_jrot = jrot_smplh[:, 111:]
+	root_orient = jrot_smplh[:, 0:3].reshape(-1, 3)
+
+	# Forward through model to get a superset of required joints
+	T = jrot_smplh.shape[0]
+	ntu_jpos = np.zeros((T, 219))
+	for t in range(T):
+		res = smplh(body_pose=torch.Tensor(smpl_body_jrot[t:t+1, :]),
+					global_orient=torch.Tensor(root_orient[t: t+1, :]),
+					left_hand_pose = torch.Tensor(left_hand_jrot[t: t+1, :]),
+					right_hand_pose=torch.Tensor(right_hand_jrot[t: t+1, :]),
+					# transl=torch.Tensor(transl)
+					)
+		# joints : [1, 73, 3]
+		jpos = res.joints.detach().cpu().numpy()[:, :, :].reshape(-1)
+		# jpos : [219,]
+		ntu_jpos[t, :] = jpos
+	return ntu_jpos
+
+def convert_smpl_to_h36m_joint_pose(smplh, bdata, J_reg, comp_device):
+	jrot_smplh = bdata['poses']
+	time_length = len(bdata['trans'])
+
+	num_betas = 16
+
+	# number of DMPL parameters
+	# num_dmpls = 8
+
+	T = jrot_smplh.shape[0]
+	jposes = np.zeros((T, 17*3))
+	for t in range(T):
+		body_parms = {
+			'root_orient': torch.Tensor(bdata['poses'][t:t+1, :3]).to(comp_device), # controls the global root orientation
+			'pose_body': torch.Tensor(bdata['poses'][t:t+1, 3:66]).to(comp_device), # controls the body
+			'pose_hand': torch.Tensor(bdata['poses'][t:t+1, 66:]).to(comp_device), # controls the finger articulation
+			'trans': torch.Tensor(bdata['trans'][t:t+1]).to(comp_device), # controls the global body position
+			'betas': torch.Tensor(np.repeat(bdata['betas'][:num_betas][np.newaxis], repeats=(1), axis=0)).to(comp_device), # controls the body shape. Body shape is static
+			# 'dmpls': torch.Tensor(bdata['dmpls'][t:t+1, :num_dmpls]).to(comp_device) # controls soft tissue dynamics
+		}
+		body_trans_root = smplh(**{k:v for k,v in body_parms.items() if k in ['pose_body', 'betas', 'pose_hand', 'dmpls', 'trans', 'root_orient']})
+		# joints : [1, 73, 3]
+		# vertices : [1, 6890, 3]
+		# J_reg : [17, 6890]
+		mesh = body_trans_root.vertices.detach().cpu().numpy()
+		kpts = np.dot(J_reg, mesh)    # (17,T,3) => here T = 1
+		jposes[t, :] = kpts.reshape(-1) # (51,)
+
+	return jposes
 
 def viz_ntu_jpos(jpos_p, l_ft_p):
 	'''Visualize sequences of NTU-skeleton joint positions'''
@@ -273,6 +306,48 @@ def viz_ntu_jpos(jpos_p, l_ft_p):
 		viz.viz_seq(seq=x, folder_p='test_viz/test_ntu_w_axis', sk_type='nturgbd', debug=True)
 		print('-'*50)
 
+def store_joint_poses(smplh_model_p, dest_jpos_p, amass_p, sk_type="nturgbd", only_existing=False):
+
+	print(sk_type)
+	print(only_existing)
+	# Model to forward-pass through, to store joint positions
+	# if sk_type == "nturgbd":
+	smplh = SMPLH(smplh_model_p, create_transl=False, ext='pkl',
+							gender='male', use_pca=False, batch_size=1)
+	# elif sk_type == "h36m":
+
+	
+	if only_existing:
+		l_m_ft_p = get_existing_amass_pose(amass_p, dest_jpos_p)
+	else:
+		l_m_ft_p = get_missing_body_joint_pos(dest_jpos_p)
+
+
+	comp_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+	if sk_type == "h36m":
+		J_reg_dir = '../data/J_regressor_h36m_correct.npy'
+		J_reg = np.load(J_reg_dir)
+
+	for i, (ft_p, jpos_path) in enumerate(tqdm(l_m_ft_p)):
+		print(ospj(amass_p, ft_p))
+		bdata = np.load(ospj(amass_p, ft_p))
+		if sk_type == "nturgbd":
+			jposes = convert_smpl_to_ntu_joint_pose(smplh, bdata)
+		elif sk_type == "h36m":
+			jposes = convert_smpl_to_h36m_joint_pose(smplh, bdata, J_reg, comp_device)
+
+
+		# Save to disk
+		if not os.path.exists(ospd(jpos_path)):
+			os.makedirs(ospd(jpos_path))
+		np.savez(jpos_path, joint_pos=jposes, allow_pickle=True)
+
+def store_ntu_jpos(smplh_model_p, dest_jpos_p, amass_p):
+	'''Store joint positions of kfor NTU-RGBD skeleton
+	'''
+	store_joint_poses(smplh_model_p, dest_jpos_p, amass_p)
+	return
 
 def main():
 	'''Store preliminary stuff'''

@@ -26,6 +26,7 @@ import pickle
 import preprocess
 import dutils
 import viz
+import argparse
 
 """
 Script to load BABEL segments with NTU skeleton format and pre-process.
@@ -163,7 +164,7 @@ class Babel_AR:
            Fraction of segment covered by an action: {'walk': 1.0, 'wave': 0.5}
 
     '''
-    def __init__(self, dataset, dense=True, seq_dense_ann_type={}, sk_type='nturgbd'):
+    def __init__(self, dataset, dense=True, seq_dense_ann_type={}, sk_type='nturgbd', jpos_p='../data/'):
         '''Dataset with (samples, different GTs)
         '''
         # Load dataset
@@ -171,7 +172,7 @@ class Babel_AR:
         self.dense = dense
         self.seq_dense_ann_type = seq_dense_ann_type
         self.sk_type = sk_type
-        self.jpos_p = '../data/'
+        self.jpos_p = jpos_p
 
         # Get frame-rate for each seq. in AMASS
         f_p = '../data/featp_2_fps.json'
@@ -232,16 +233,19 @@ class Babel_AR:
 
         # Sanity check
         fft_p = ospj(jpos_p, ddir_n, sub_fol_n, ospb(ft_p))
-        assert os.path.exists(fft_p)
+        assert os.path.exists(fft_p), fft_p
 
         # Load seq. fts.
         ft = np.load(fft_p)['joint_pos']
         T, ft_sz = ft.shape
 
-        # Get NTU skeleton joints
-        ntu_js = dutils.smpl_to(model_type='smplh', out_format=sk_type)
-        ft = ft.reshape(T, -1, 3)
-        ft = ft[:, ntu_js, :]
+        if sk_type == "nturgbd":
+            # Get NTU skeleton joints
+            ntu_js = dutils.smpl_to(model_type='smplh', out_format=sk_type)
+            ft = ft.reshape(T, -1, 3)
+            ft = ft[:, ntu_js, :]
+        else:
+            ft = ft.reshape(T, -1, 3)
 
         # Sub-sample to 30fps
         orig_fps = self.ft_p_2_fps[ft_p]
@@ -425,45 +429,58 @@ class Babel_AR:
         return
 
 
-#  Create dataset
-# --------------------------
-d_folder = '../data/babel_v1.0_release/'
-w_folder = '../data/babel_v1.0/'
-sk_type = 'h36m'
-for spl in ['train', 'val']:
+def parse_args():
+    parser = argparse.ArgumentParser(description="Create datasets from splits and joint locations")
+    parser.add_argument('--splits_folder', type=str, default='../data/babel_v1.0_release/', help="Path to the folder containing splits")
+    parser.add_argument('--joints_folder', type=str, default='../data/babel_joint_pos', help="Path to the folder containing joint locations")
+    parser.add_argument('--dst_folder', type=str, default='../data/babel_v1.0/', help="Path to the destination folder")
+    return parser.parse_args()
 
-    # Load Dense BABEL
-    data = dutils.read_json(ospj(d_folder, f'{spl}.json'))
-    dataset = [data[sid] for sid in data]
-    dense_babel = Babel_AR(dataset, dense=True, sk_type=sk_type)
-    # Store Dense BABEL
-    d_filename = w_folder + 'babel_v1.0_'+ spl + '_samples.pkl'
-    dutils.write_pkl(dense_babel.d, d_filename)
+if __name__ == "__main__" :
+    args = parse_args()
 
-    # Load Extra BABEL
-    data = dutils.read_json(ospj(d_folder, f'extra_{spl}.json'))
-    dataset = [data[sid] for sid in data]
-    extra_babel = Babel_AR(dataset, dense=False,
-                           seq_dense_ann_type=dense_babel.seq_dense_ann_type)
-    # Store Dense + Extra
-    de = {}
-    for k in dense_babel.d.keys():
-        de[k] = dense_babel.d[k] + extra_babel.d[k]
-    ex_filename = w_folder + 'babel_v1.0_' + spl + '_extra_samples.pkl'
-    dutils.write_pkl(de, ex_filename)
+    #  Create dataset
+    # --------------------------
+    # d_folder = '../data/babel_v1.0_release/'
+    d_folder = args.splits_folder
+    w_folder = args.dst_folder
+    # w_folder = '../data/babel_v1.0/'
+    sk_type = 'h36m'
+    for spl in ['train', 'val']:
 
-    #  Pre-process, Store data in dataset
-    print('NTU-style preprocessing')
-    babel_dataset_AR = ntu_style_preprocessing(d_filename)
-    babel_dataset_AR = ntu_style_preprocessing(ex_filename)
+        # Load Dense BABEL
+        data = dutils.read_json(ospj(d_folder, f'{spl}.json'))
+        dataset = [data[sid] for sid in data]
+        dense_babel = Babel_AR(dataset, dense=True, sk_type=sk_type, jpos_p=args.joints_folder)
+        # Store Dense BABEL
+        d_filename = w_folder + 'babel_v1.0_'+ spl + '_samples.pkl'
+        dutils.write_pkl(dense_babel.d, d_filename)
 
-    for ex, C in product(('', '_extra'), (120, 60)):
+        # Load Extra BABEL
+        data = dutils.read_json(ospj(d_folder, f'extra_{spl}.json'))
+        dataset = [data[sid] for sid in data]
+        extra_babel = Babel_AR(dataset, dense=False,
+                            seq_dense_ann_type=dense_babel.seq_dense_ann_type,
+                            jpos_p=args.joints_folder)
+        # Store Dense + Extra
+        de = {}
+        for k in dense_babel.d.keys():
+            de[k] = dense_babel.d[k] + extra_babel.d[k]
+        ex_filename = w_folder + 'babel_v1.0_' + spl + '_extra_samples.pkl'
+        dutils.write_pkl(de, ex_filename)
 
-        #  Split, store data in npy file, labels in pkl
-        store_splits_subsets(n_classes=C, spl=spl, plus_extra=True)
-        store_splits_subsets(n_classes=C, spl=spl, plus_extra=False)
+        #  Pre-process, Store data in dataset
+        print('NTU-style preprocessing')
+        babel_dataset_AR = ntu_style_preprocessing(d_filename)
+        babel_dataset_AR = ntu_style_preprocessing(ex_filename)
 
-        # Store counts of samples for training with class-balanced focal loss
-        label_fp = ospj(w_folder, f'{spl}{ex}_label_{C}.pkl')
-        dutils.store_counts(label_fp)
+        for ex, C in product(('', '_extra'), (120, 60)):
+
+            #  Split, store data in npy file, labels in pkl
+            store_splits_subsets(n_classes=C, spl=spl, plus_extra=True)
+            store_splits_subsets(n_classes=C, spl=spl, plus_extra=False)
+
+            # Store counts of samples for training with class-balanced focal loss
+            label_fp = ospj(w_folder, f'{spl}{ex}_label_{C}.pkl')
+            dutils.store_counts(label_fp)
 

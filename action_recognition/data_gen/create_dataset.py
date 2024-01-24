@@ -115,9 +115,11 @@ def store_splits_subsets(n_classes, spl, plus_extra = True, w_folder = '../data/
 
     # Save features that'll be loaded by dataloader
     ar_idxs = np.array(split_idxs[spl])
-    X = b_AR_dset['X'][ar_idxs]
-    if plus_extra:
-        fn = w_folder + f'{spl}_extra_ntu_sk_{n_classes}.npy'
+    X = []
+    for idx in split_idxs[spl]:
+        X.append(b_AR_dset['X'][idx]) # append to other list instead of array conversion (save RAM)
+    X = np.array(X)
+
     if sk_type == 'nturgbd':
         if plus_extra:
             fn = ospj(w_folder, f'{spl}_extra_ntu_sk_{n_classes}.npy')

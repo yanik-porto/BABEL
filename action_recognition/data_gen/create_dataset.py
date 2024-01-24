@@ -455,8 +455,9 @@ class Babel_AR:
 def parse_args():
     parser = argparse.ArgumentParser(description="Create datasets from splits and joint locations")
     parser.add_argument('--splits_folder', type=str, default='../data/babel_v1.0_release/', help="Path to the folder containing splits")
-    parser.add_argument('--joints_folder', type=str, default='../data/babel_joint_pos', help="Path to the folder containing joint locations")
+    parser.add_argument('--joints_folder', type=str, default='../data', help="Path to the folder containing joint locations")
     parser.add_argument('--dst_folder', type=str, default='../data/babel_v1.0/', help="Path to the destination folder")
+    parser.add_argument('--create_extra', action="store_true", default=False, help="Set if extra data should be processed")
     return parser.parse_args()
 
 if __name__ == "__main__" :
@@ -479,31 +480,35 @@ if __name__ == "__main__" :
         d_filename = ospj(w_folder, 'babel_v1.0_'+ spl + '_samples.pkl')
         dutils.write_pkl(dense_babel.d, d_filename)
 
-        # Load Extra BABEL
-        data = dutils.read_json(ospj(d_folder, f'extra_{spl}.json'))
-        dataset = [data[sid] for sid in data]
-        extra_babel = Babel_AR(dataset, dense=False,
-                            seq_dense_ann_type=dense_babel.seq_dense_ann_type,
-                            jpos_p=args.joints_folder)
-        # Store Dense + Extra
-        de = {}
-        for k in dense_babel.d.keys():
-            de[k] = dense_babel.d[k] + extra_babel.d[k]
-        ex_filename = w_folder + 'babel_v1.0_' + spl + '_extra_samples.pkl'
-        dutils.write_pkl(de, ex_filename)
+        if args.create_extra:
+            # Load Extra BABEL
+            data = dutils.read_json(ospj(d_folder, f'extra_{spl}.json'))
+            dataset = [data[sid] for sid in data]
+            extra_babel = Babel_AR(dataset, dense=False,
+                                seq_dense_ann_type=dense_babel.seq_dense_ann_type,
+                                jpos_p=args.joints_folder)
+            # Store Dense + Extra
+            de = {}
+            for k in dense_babel.d.keys():
+                de[k] = dense_babel.d[k] + extra_babel.d[k]
+            ex_filename = w_folder + 'babel_v1.0_' + spl + '_extra_samples.pkl'
+            dutils.write_pkl(de, ex_filename)
 
-        #  Pre-process, Store data in dataset
-        print('NTU-style preprocessing')
-        babel_dataset_AR = ntu_style_preprocessing(d_filename)
-        babel_dataset_AR = ntu_style_preprocessing(ex_filename)
+        if sk_type == 'nturgbd':
+            #  Pre-process, Store data in dataset
+            print('NTU-style preprocessing')
+            babel_dataset_AR = ntu_style_preprocessing(d_filename)
+            if args.create_extra:
+                babel_dataset_AR = ntu_style_preprocessing(ex_filename)
 
-        for ex, C in product(('', '_extra'), (120, 60)):
-
-            #  Split, store data in npy file, labels in pkl
-            store_splits_subsets(n_classes=C, spl=spl, plus_extra=True)
-            store_splits_subsets(n_classes=C, spl=spl, plus_extra=False)
-
-            # Store counts of samples for training with class-balanced focal loss
-            label_fp = ospj(w_folder, f'{spl}{ex}_label_{C}.pkl')
+        for C in (120, 60):
+            store_splits_subsets(n_classes=C, spl=spl, plus_extra=False, sk_type=sk_type, w_folder=args.dst_folder)
+            label_fp = ospj(w_folder, f'{spl}_label_{C}.pkl')
             dutils.store_counts(label_fp)
 
+        if args.create_extra:
+            ex = '_extra'
+            for C in (120, 60):
+                store_splits_subsets(n_classes=C, spl=spl, plus_extra=True, sk_type=sk_type, w_folder=args.dst_folder)
+                label_fp = ospj(w_folder, f'{spl}{ex}_label_{C}.pkl')
+                dutils.store_counts(label_fp)

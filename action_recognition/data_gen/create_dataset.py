@@ -76,7 +76,7 @@ def get_act_idx(y, act2idx, n_classes):
     else:
         return n_classes
 
-def store_splits_subsets(n_classes, spl, plus_extra = True, w_folder = '../data/babel_v1.0/'):
+def store_splits_subsets(n_classes, spl, plus_extra = True, w_folder = '../data/babel_v1.0/', sk_type = 'nturgbd'):
     '''
     '''
     # Get splits
@@ -223,20 +223,29 @@ class Babel_AR:
             jpos_p = ospj(self.jpos_p, 'joint_pos')
         if 'nturgbd' == sk_type or 'h36m' == sk_type:  # NTU (T, 219)
             jpos_p = ospj(self.jpos_p, 'babel_joint_pos')
+        if 'smplh' == sk_type: # SMPLH (T, 52*3) (joint angles)
+            jpos_p = ospj(self.jpos_p, 'smplh')
+        
+        if not sk_type == 'smplh':
+            # Get the correct dataset folder name
+            ddir_n = ospb(ospd(ospd(ft_p)))
+            ddir_map = {'BioMotionLab_NTroje': 'BMLrub', 'DFaust_67': 'DFaust'}
+            ddir_n = ddir_map[ddir_n] if ddir_n in ddir_map else ddir_n
+            # Get the subject folder name
+            sub_fol_n = ospb(ospd(ft_p))
 
-        # Get the correct dataset folder name
-        ddir_n = ospb(ospd(ospd(ft_p)))
-        ddir_map = {'BioMotionLab_NTroje': 'BMLrub', 'DFaust_67': 'DFaust'}
-        ddir_n = ddir_map[ddir_n] if ddir_n in ddir_map else ddir_n
-        # Get the subject folder name
-        sub_fol_n = ospb(ospd(ft_p))
+            # Sanity check
+            fft_p = ospj(jpos_p, ddir_n, sub_fol_n, ospb(ft_p))
+            assert os.path.exists(fft_p), fft_p
 
-        # Sanity check
-        fft_p = ospj(jpos_p, ddir_n, sub_fol_n, ospb(ft_p))
-        assert os.path.exists(fft_p), fft_p
+            # Load seq. fts.
+            ft = np.load(fft_p)['joint_pos']
+        else:
+            fft_p = ospj(jpos_p, ft_p)
+            assert os.path.exists(fft_p), fft_p
 
-        # Load seq. fts.
-        ft = np.load(fft_p)['joint_pos']
+            ft = np.load(fft_p)['poses']
+
         T, ft_sz = ft.shape
 
         if sk_type == "nturgbd":

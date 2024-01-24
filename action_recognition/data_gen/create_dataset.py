@@ -133,13 +133,12 @@ def store_splits_subsets(n_classes, spl, plus_extra = True, w_folder = '../data/
     np.save(fn, X)
 
     # labels
-    labels = {k: np.array(b_AR_dset[k])[ar_idxs] for k in b_AR_dset if k!='X'}
+    labels = {k: np.array(b_AR_dset[k], dtype=object)[ar_idxs] for k in b_AR_dset if k!='X'}
 
     # Create, save label data structure that'll be loaded by dataloader
     label_idxs = defaultdict(list)
     for i, y1 in enumerate(labels['Y1']):
-        # y1
-        label_idxs['Y1'].append(act2idx[y1])
+        label_idxs['Y1'].append(act2idx[y1]) # TODO : check how "transition" class if handled
         # yk
         yk = [get_act_idx(y, act2idx, n_classes) for y in labels['Yk'][i]]
         label_idxs['Yk'].append(yk)

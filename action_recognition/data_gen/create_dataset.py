@@ -89,11 +89,16 @@ def store_splits_subsets(n_classes, spl, plus_extra = True, w_folder = '../data/
     act2idx = {k: act2idx_150[k] for k in act2idx_150 if act2idx_150[k] < n_classes}
     print('{0} actions in label set: {1}'.format(len(act2idx), act2idx))
 
-    if plus_extra :
-        fp = w_folder + 'babel_v1.0_'+spl+'_extra_ntu_sk_ntu-style_preprocessed.pkl'
+    if sk_type == 'nturgbd':
+        if plus_extra :
+            fp = ospj(w_folder, 'babel_v1.0_'+spl+'_extra_ntu_sk_ntu-style_preprocessed.pkl')
+        else:
+            fp = ospj(w_folder, 'babel_v1.0_'+spl+'_ntu_sk_ntu-style_preprocessed.pkl')
     else:
-        fp = w_folder + 'babel_v1.0_'+spl+'_ntu_sk_ntu-style_preprocessed.pkl'
-
+        if plus_extra :
+            fp = ospj(w_folder, 'babel_v1.0_'+spl+'_extra_samples.pkl')
+        else:
+            fp = ospj(w_folder, 'babel_v1.0_'+spl+'_samples.pkl')
     # Get full dataset
     b_AR_dset = dutils.read_pkl(fp)
 
@@ -113,8 +118,16 @@ def store_splits_subsets(n_classes, spl, plus_extra = True, w_folder = '../data/
     X = b_AR_dset['X'][ar_idxs]
     if plus_extra:
         fn = w_folder + f'{spl}_extra_ntu_sk_{n_classes}.npy'
+    if sk_type == 'nturgbd':
+        if plus_extra:
+            fn = ospj(w_folder, f'{spl}_extra_ntu_sk_{n_classes}.npy')
+        else:
+            fn = ospj(w_folder, f'{spl}_ntu_sk_{n_classes}.npy')
     else:
-        fn = w_folder + f'{spl}_ntu_sk_{n_classes}.npy'
+        if plus_extra:
+            fn = ospj(w_folder, f'{spl}_extra_' + sk_type + f'_{n_classes}.npy')
+        else:
+            fn = ospj(w_folder, f'{spl}_' + sk_type + f'_{n_classes}.npy')
     np.save(fn, X)
 
     # labels
@@ -139,13 +152,14 @@ def store_splits_subsets(n_classes, spl, plus_extra = True, w_folder = '../data/
         label_idxs['anntr_id'].append(labels['anntr_id'][i])
 
     if plus_extra:
-        wr_f = w_folder + f'{spl}_extra_label_{n_classes}.pkl'
+        wr_f = ospj(w_folder,  f'{spl}_extra_label_{n_classes}.pkl')
     else:
-        wr_f = w_folder + f'{spl}_label_{n_classes}.pkl'
+        wr_f = ospj(w_folder, f'{spl}_label_{n_classes}.pkl')
     dutils.write_pkl(\
         (label_idxs['seg_id'], (label_idxs['Y1'], label_idxs['sid'],
                                 label_idxs['chunk_n'], label_idxs['anntr_id'])), \
                                 wr_f)
+
 
 class Babel_AR:
     '''Object containing data, methods for Action Recognition.
@@ -462,7 +476,7 @@ if __name__ == "__main__" :
         dataset = [data[sid] for sid in data]
         dense_babel = Babel_AR(dataset, dense=True, sk_type=sk_type, jpos_p=args.joints_folder)
         # Store Dense BABEL
-        d_filename = w_folder + 'babel_v1.0_'+ spl + '_samples.pkl'
+        d_filename = ospj(w_folder, 'babel_v1.0_'+ spl + '_samples.pkl')
         dutils.write_pkl(dense_babel.d, d_filename)
 
         # Load Extra BABEL

@@ -179,7 +179,7 @@ class Babel_AR:
            Fraction of segment covered by an action: {'walk': 1.0, 'wave': 0.5}
 
     '''
-    def __init__(self, dataset, dense=True, seq_dense_ann_type={}, sk_type='nturgbd', jpos_p='../data/'):
+    def __init__(self, dataset, dense=True, seq_dense_ann_type={}, sk_type='nturgbd', jpos_p='../data/', split_files=False):
         '''Dataset with (samples, different GTs)
         '''
         # Load dataset
@@ -195,9 +195,14 @@ class Babel_AR:
 
         # Dataset w/ keys = {'X', 'Y1', 'Yk', 'Yov', 'seg_id',  'sid',
         # 'seg_dur'}
-        self.d = defaultdict(list)
-        for ann in tqdm(self.babel):
-            self._update_dataset(ann)
+        if split_files:
+            self.d = []
+            for ann in tqdm(self.babel):
+                self._update_dataset_for_split(ann)
+        else:
+            self.d = defaultdict(list)
+            for ann in tqdm(self.babel):
+                self._update_dataset(ann)
 
     def _subsample_to_30fps(self, orig_ft, orig_fps):
         '''Get features at 30fps frame-rate
@@ -240,6 +245,8 @@ class Babel_AR:
             jpos_p = ospj(self.jpos_p, 'babel_joint_pos')
         if 'smplh' == sk_type: # SMPLH (T, 52*3) (joint angles)
             jpos_p = ospj(self.jpos_p, 'smplh')
+        if 'smplx' == sk_type: # SMPLH (T, 54*3) (joint angles)
+            jpos_p = ospj(self.jpos_p, 'smplx')
         
         if not sk_type == 'smplh':
             # Get the correct dataset folder name
@@ -278,6 +285,46 @@ class Babel_AR:
         # if orig_fps != 30.0:
         #   self._viz_x(ft)
         return ft
+    
+    def _load_seq_poses(self, ft_p, sk_type):
+        if 'smplh' == sk_type: # SMPLH (T, 52*3) (joint angles)
+            jpos_p = ospj(self.jpos_p, 'smplh')
+            ft_p_tmp = ft_p
+        if 'smplx' == sk_type: # SMPLH (T, 52*3) (joint angles)
+            jpos_p = ospj(self.jpos_p, 'smplx')
+            ft_p_tmp = ft_p.replace('_poses.npz', '_stageii.npz')
+            ft_p_tmp = ft_p_tmp.replace(' ', '_')
+
+        fft_p = ospj(jpos_p, ft_p_tmp)
+        # assert os.path.exists(fft_p), fft_p
+        if not os.path.exists(fft_p):
+            print(fft_p, " does not exist")
+            return None, None, None
+
+        ft = np.load(fft_p)
+        poses = ft['poses']
+        trans = ft['trans']
+
+        poses = self._orig_sample_to_30fps(poses, ft_p)
+        trans = self._orig_sample_to_30fps(trans, ft_p)
+        
+        return poses, trans, ft['betas']
+
+        # ft = ft.reshape(T, -1, 3)
+
+        # T, ft_sz = ft.shape
+
+        # orig_fps = self.ft_p_2_fps[ft_p]
+        # ft = self._subsample_to_30fps(ft, orig_fps)
+
+    def _orig_sample_to_30fps(self, ft, ft_p):
+        T, ft_sz = ft.shape
+
+        ft = ft.reshape(T, -1, 3)
+
+        orig_fps = self.ft_p_2_fps[ft_p]
+        ft = self._subsample_to_30fps(ft, orig_fps)
+        return ft
 
     def _get_per_f_labels(self, ann, ann_type, seq_dur):
         ''' '''
@@ -299,7 +346,7 @@ class Babel_AR:
                     yf[n_f] += seg['act_cat']
         return yf
 
-    def _compute_dur_samples(self, ann, ann_type, seq_ft, seq_dur, dur=5.0):
+    def _compute_dur_samples(self, ann, ann_type, seq_ft, seq_dur, dur=5.0, seq_trans=None, do_not_equalize=False):
         '''Return each GT action, corresponding to the fraction of the
         segment that it overlaps with.
         There are 2 conditions that we need to handle:
@@ -345,6 +392,9 @@ class Babel_AR:
             # Get segment feats.
             seg_st_f, seg_end_f = int(30.0*seg['start_t']), int(30.0*seg['end_t'])
             seg_x = seq_ft[seg_st_f: seg_end_f, :, :]
+            if seq_trans is not None:
+                seg_trans = seq_trans[seg_st_f: seg_end_f, :, :]
+
 
             # Split segment into <n_chunks> <dur>-second chunks
             n_f_pc = 30.0 * dur
@@ -356,9 +406,21 @@ class Babel_AR:
                 ch_end_f = int(min(ch_st_f + n_f_pc, seg_x.shape[0]))
                 x = seg_x[ch_st_f: ch_end_f, :, :]
 
-                # Handle case where chunk_T < n_f_pc
                 x_T, nj, xyz = x.shape
-                x_ch = np.concatenate((x, np.zeros((int(n_f_pc)- x_T,  nj, xyz))), axis=0)
+                if not do_not_equalize:
+                    # Handle case where chunk_T < n_f_pc
+                    x_ch = np.concatenate((x, np.zeros((int(n_f_pc)- x_T,  nj, xyz))), axis=0)
+                else:
+                    x_ch = x
+
+
+                if seq_trans is not None:
+                    trans = seg_trans[ch_st_f: ch_end_f, :, :]
+                    if not do_not_equalize:
+                        trans_T, nj_T, xyz_T = trans.shape
+                        trans_ch = np.concatenate((trans, np.zeros((int(n_f_pc)- trans_T,  nj_T, xyz_T))), axis=0)
+                    else:   
+                        trans_ch = trans
 
                 # Labels for this chunk
                 yov = Counter(flatten([yf[seg_st_f + n_f] for n_f in range(ch_st_f, ch_end_f)]))
@@ -374,7 +436,7 @@ class Babel_AR:
                 # For each act_cat in segment, create a separate sample
                 for cat in seg['act_cat']:
                     # Add to samples GTs
-                    seq_samples.append({'seg_id': seg['seg_id'],
+                    seq_sample = {'seg_id': seg['seg_id'],
                                         'chunk_n': n_ch,
                                         'chunk_dur': round(x_T/n_f_pc, 3),
                                         'x': x_ch,
@@ -382,7 +444,12 @@ class Babel_AR:
                                         'yk': seg['act_cat'],
                                         'yov': yov,
                                         'anntr_id': ann['anntr_id']
-                                       })
+                                       }
+                    if seq_trans is not None:
+                        seq_sample['trans'] = trans_ch
+
+                    seq_samples.append(seq_sample)
+
         return seq_samples
 
     def _sample_at_seg_chunk_level(self, ann, seq_samples):
@@ -400,12 +467,14 @@ class Babel_AR:
             # <dict>: fractions of overlapping act. cats.
             self.d['Yov'].append(sample['yov'])
         return
+    
 
     def _update_dataset(self, ann):
         '''Return one sample (one segment) = (X, Y1, Yall)'''
 
         # Get feats. for seq.
-        seq_ft = self._load_seq_feats(ann['feat_p'], self.sk_type)
+        if 'smpl' not in self.sk_type:
+            seq_ft = self._load_seq_feats(ann['feat_p'], self.sk_type)
 
         # To keep track of type of annotation for loading 'extra'
         # Compute all GT labels for this seq.
@@ -451,6 +520,36 @@ class Babel_AR:
             else:
                 print('Unexpected format for extra!')
         return
+    
+    def _sample_at_seg_chunk_level_for_split(self, ann, seq_samples, betas):
+        for sample in seq_samples:
+            # print('pose sample: ', sample['x'].shape)
+            seg = {}
+            seg['sid'] = ann['babel_sid']
+            seg['seg_id'] = sample['seg_id']
+            seg['Y1'] = sample['y1']
+            seg['poses'] = sample['x'].reshape((sample['x'].shape[0], -1))
+            seg['trans'] = sample['trans'].reshape((sample['trans'].shape[0], -1))
+            seg['betas'] = betas
+            seg['mocap_frame_rate'] = 30.0
+            seg['gender'] = 'neutral'
+            self.d.append(seg)
+
+    def _update_dataset_for_split(self, ann):
+        seq_poses, seq_trans, betas = self._load_seq_poses(ann['feat_p'], self.sk_type)
+        if seq_poses is None:
+            return
+
+        seq_samples = None
+        if ann['frame_ann'] is not None:
+            ann_ar = ann['frame_ann']
+            self.seq_dense_ann_type[ann['babel_sid']] = 'frame_ann'
+            seq_samples = self._compute_dur_samples(ann_ar, 'frame_ann', seq_poses, ann['dur'], seq_trans=seq_trans, do_not_equalize=True)
+        else:
+            ann_ar = ann['seq_ann']
+            self.seq_dense_ann_type[ann['babel_sid']] = 'seq_ann'
+            seq_samples = self._compute_dur_samples(ann_ar, 'seq_ann', seq_poses, ann['dur'], seq_trans=seq_trans, do_not_equalize=True)
+        self._sample_at_seg_chunk_level_for_split(ann, seq_samples, betas)
 
 
 def parse_args():
@@ -459,6 +558,7 @@ def parse_args():
     parser.add_argument('--joints_folder', type=str, default='../data', help="Path to the folder containing joint locations")
     parser.add_argument('--dst_folder', type=str, default='../data/babel_v1.0/', help="Path to the destination folder")
     parser.add_argument('--create_extra', action="store_true", default=False, help="Set if extra data should be processed")
+    parser.add_argument('--in_several_files', action="store_true", default=False, help="Set if one file per action should be extracted")
     return parser.parse_args()
 
 if __name__ == "__main__" :
@@ -470,46 +570,56 @@ if __name__ == "__main__" :
     d_folder = args.splits_folder
     w_folder = args.dst_folder
     # w_folder = '../data/babel_v1.0/'
-    sk_type = 'h36m'
+    # sk_type = 'smplh'
+    sk_type = 'smplx'
     for spl in ['train', 'val']:
 
         # Load Dense BABEL
         data = dutils.read_json(ospj(d_folder, f'{spl}.json'))
         dataset = [data[sid] for sid in data]
-        dense_babel = Babel_AR(dataset, dense=True, sk_type=sk_type, jpos_p=args.joints_folder)
-        # Store Dense BABEL
-        d_filename = ospj(w_folder, 'babel_v1.0_'+ spl + '_samples.pkl')
-        dutils.write_pkl(dense_babel.d, d_filename)
+        if args.in_several_files:
+            dense_babel = Babel_AR(dataset, dense=True, sk_type=sk_type, jpos_p=args.joints_folder, split_files=True)
+            folder_spl = ospj(w_folder, spl)
+            os.makedirs(folder_spl, exist_ok=True)
+            print("export files in split folders")
+            for d in tqdm(dense_babel.d):
+                f_out_path = ospj(folder_spl, str(d['sid']) + '_' + str(d['seg_id']) + '_' + str(d['Y1']).replace('/','-') + '.npz')
+                np.savez(f_out_path, **d)
+        else:
+            dense_babel = Babel_AR(dataset, dense=True, sk_type=sk_type, jpos_p=args.joints_folder, split_files=False)
+            # Store Dense BABEL
+            d_filename = ospj(w_folder, 'babel_v1.0_'+ spl + '_samples.pkl')
+            dutils.write_pkl(dense_babel.d, d_filename)
 
-        if args.create_extra:
-            # Load Extra BABEL
-            data = dutils.read_json(ospj(d_folder, f'extra_{spl}.json'))
-            dataset = [data[sid] for sid in data]
-            extra_babel = Babel_AR(dataset, dense=False,
-                                seq_dense_ann_type=dense_babel.seq_dense_ann_type,
-                                jpos_p=args.joints_folder)
-            # Store Dense + Extra
-            de = {}
-            for k in dense_babel.d.keys():
-                de[k] = dense_babel.d[k] + extra_babel.d[k]
-            ex_filename = w_folder + 'babel_v1.0_' + spl + '_extra_samples.pkl'
-            dutils.write_pkl(de, ex_filename)
-
-        if sk_type == 'nturgbd':
-            #  Pre-process, Store data in dataset
-            print('NTU-style preprocessing')
-            babel_dataset_AR = ntu_style_preprocessing(d_filename)
             if args.create_extra:
-                babel_dataset_AR = ntu_style_preprocessing(ex_filename)
+                # Load Extra BABEL
+                data = dutils.read_json(ospj(d_folder, f'extra_{spl}.json'))
+                dataset = [data[sid] for sid in data]
+                extra_babel = Babel_AR(dataset, dense=False,
+                                    seq_dense_ann_type=dense_babel.seq_dense_ann_type,
+                                    jpos_p=args.joints_folder)
+                # Store Dense + Extra
+                de = {}
+                for k in dense_babel.d.keys():
+                    de[k] = dense_babel.d[k] + extra_babel.d[k]
+                ex_filename = w_folder + 'babel_v1.0_' + spl + '_extra_samples.pkl'
+                dutils.write_pkl(de, ex_filename)
 
-        for C in (120, 60):
-            store_splits_subsets(n_classes=C, spl=spl, plus_extra=False, sk_type=sk_type, w_folder=args.dst_folder)
-            label_fp = ospj(w_folder, f'{spl}_label_{C}.pkl')
-            dutils.store_counts(label_fp)
+            if sk_type == 'nturgbd':
+                #  Pre-process, Store data in dataset
+                print('NTU-style preprocessing')
+                babel_dataset_AR = ntu_style_preprocessing(d_filename)
+                if args.create_extra:
+                    babel_dataset_AR = ntu_style_preprocessing(ex_filename)
 
-        if args.create_extra:
-            ex = '_extra'
             for C in (120, 60):
-                store_splits_subsets(n_classes=C, spl=spl, plus_extra=True, sk_type=sk_type, w_folder=args.dst_folder)
-                label_fp = ospj(w_folder, f'{spl}{ex}_label_{C}.pkl')
+                store_splits_subsets(n_classes=C, spl=spl, plus_extra=False, sk_type=sk_type, w_folder=args.dst_folder)
+                label_fp = ospj(w_folder, f'{spl}_label_{C}.pkl')
                 dutils.store_counts(label_fp)
+
+            if args.create_extra:
+                ex = '_extra'
+                for C in (120, 60):
+                    store_splits_subsets(n_classes=C, spl=spl, plus_extra=True, sk_type=sk_type, w_folder=args.dst_folder)
+                    label_fp = ospj(w_folder, f'{spl}{ex}_label_{C}.pkl')
+                    dutils.store_counts(label_fp)

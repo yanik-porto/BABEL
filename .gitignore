@@ -10,6 +10,12 @@ notebooks/.ipynb_checkpoints
 # Data    	
 data/babel_v1.0_release
 action_recognition/data/release
+action_recognition/data/babel_joint_pos
+action_recognition/data/babel_v1.0
+action_recognition/data/babel_v1.0_release
+action_recognition/data/AMASS*
+action_recognition/data/*
+data/*
 
 # Predictions
 action_recognition/challenge/*.pkl
